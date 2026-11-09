@@ -1,0 +1,28 @@
+name: Windows RDP Free Node 2
+
+on:
+  workflow_dispatch:
+
+env:
+  RDP_USER: khangnode2
+  RDP_PASS: ${{ secrets.RDP_PASS }}
+
+jobs:
+  windows-rdp:
+    name: Khoi Dong Windows RDP
+    runs-on: windows-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Chay Windows RDP va Tunnel
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAILSCALE_KEY: ${{ secrets.TAILSCALE_KEY }}
+        RDP_PASS: ${{ secrets.RDP_PASS }}
+        REPO_NAME: ${{ github.repository }}
+      run: pwsh -ExecutionPolicy Bypass -File .\start.ps1
