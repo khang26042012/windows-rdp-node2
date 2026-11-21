@@ -9,15 +9,69 @@ reg add 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-T
 reg add 'HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' /v 'ColorDepth' /t REG_DWORD /d 3 /f
 reg add 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations' /v 'DWMFRAMEINTERVAL' /t REG_DWORD /d 15 /f
 
-# 3. Tao User khangmc
-$user = 'khangnode2'
-$pass = $env:RDP_PASS
-New-LocalUser -Name $user -Password (ConvertTo-SecureString $pass -AsPlainText -Force) *>$null
-Add-LocalGroupMember -Group 'Administrators' -Member $user
-Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $user
+# 3. Tao User RDP (Tat policy mat khau phuc tap de chap nhan moi RDP_PASS)
+$user = if ($env:RDP_USER) { $env:RDP_USER.Trim() } else { 'khangnode2' }
+$pass = if ($null -ne $env:RDP_PASS) { $env:RDP_PASS.Trim("`r", "`n") } else { '' }
+
+if ([string]::IsNullOrEmpty($pass)) {
+    Write-Error 'LOI: Bien moi truong RDP_PASS dang trong! Vui long kiem tra GitHub Secret RDP_PASS.'
+    exit 1
+}
+
+try {
+    $secCfg = Join-Path $env:TEMP 'secpol.cfg'
+    $secDb  = Join-Path $env:TEMP 'secedit.sdb'
+    secedit /export /cfg $secCfg | Out-Null
+    if (Test-Path $secCfg) {
+        $pol = Get-Content $secCfg -Raw
+        $pol = $pol -replace '(?m)^PasswordComplexity\s*=\s*\d+', 'PasswordComplexity = 0'
+        $pol = $pol -replace '(?m)^MinimumPasswordLength\s*=\s*\d+', 'MinimumPasswordLength = 0'
+        Set-Content -Path $secCfg -Value $pol -Encoding Unicode
+        secedit /configure /db $secDb /cfg $secCfg /areas SECURITYPOLICY | Out-Null
+    }
+    net accounts /minpwlen:0 /maxpwage:unlimited | Out-Null
+    Remove-Item $secCfg, $secDb -Force -ErrorAction SilentlyContinue
+    Write-Host 'Da tat rang buoc do phuc tap mat khau Windows!' -ForegroundColor Cyan
+} catch {
+    Write-Host "Canh bao khi cap nhat secpol: $_" -ForegroundColor Yellow
+}
+
+$securePass = ConvertTo-SecureString $pass -AsPlainText -Force
+$existingUser = Get-LocalUser -Name $user -ErrorAction SilentlyContinue
+if ($existingUser) {
+    Set-LocalUser -Name $user -Password $securePass -PasswordNeverExpires $true
+} else {
+    try {
+        New-LocalUser -Name $user -Password $securePass -PasswordNeverExpires -AccountNeverExpires -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "New-LocalUser that bai ($($_)), thu tao bang net user..." -ForegroundColor Yellow
+        & net.exe user $user $pass /add /y
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "LOI: Khong the tao user $user (exit code $LASTEXITCODE)."
+            exit 1
+        }
+    }
+}
+
+if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
+    Write-Error "LOI: User $user van chua ton tai sau khi tao!"
+    exit 1
+}
+
+foreach ($grp in @('Administrators', 'Remote Desktop Users')) {
+    try {
+        Add-LocalGroupMember -Group $grp -Member $user -ErrorAction Stop
+    } catch {
+        if ($_.Exception.Message -notmatch 'already a member') {
+            & net.exe localgroup $grp $user /add | Out-Null
+        }
+    }
+}
+
 Enable-LocalUser -Name $user
+Set-LocalUser -Name $user -PasswordNeverExpires $true
 Restart-Service TermService -Force
-Write-Host 'User setup thanh cong!' -ForegroundColor Green
+Write-Host "User setup thanh cong! ($user)" -ForegroundColor Green
 
 # 3.5. TU DONG TAI VA KHOI PHUC GOLDEN PACK TU GOOGLE DRIVE
 $gdriveId = "1MmWF4PcpjKh4V2UDielgOFJfgiJPtP8D"
@@ -132,12 +186,17 @@ if ($tsKey) {
             Write-Host "Dang ket noi vao mang Tailscale..." -ForegroundColor Cyan
             & $tsExe up --authkey=$tsKey --hostname='windows-khang2' --unattended --accept-routes
             Start-Sleep -Seconds 4
-            $tsIp = (& $tsExe ip -4).Trim()
-            Write-Host "==========================================================" -ForegroundColor Green
-            Write-Host "🎉 TAILSCALE DA KET NOI THANH CONG!" -ForegroundColor Green
-            Write-Host "IP NOI BO TAILSCALE: $tsIp" -ForegroundColor Yellow
-            Write-Host "HOSTNAME: windows-khang2" -ForegroundColor Yellow
-            Write-Host "==========================================================" -ForegroundColor Green
+            $rawTsIp = & $tsExe ip -4 2>$null
+            if ($rawTsIp) {
+                $tsIp = ($rawTsIp | Select-Object -First 1).Trim()
+                Write-Host "==========================================================" -ForegroundColor Green
+                Write-Host "🎉 TAILSCALE DA KET NOI THANH CONG!" -ForegroundColor Green
+                Write-Host "IP NOI BO TAILSCALE: $tsIp" -ForegroundColor Yellow
+                Write-Host "HOSTNAME: windows-khang2" -ForegroundColor Yellow
+                Write-Host "==========================================================" -ForegroundColor Green
+            } else {
+                Write-Host "Tailscale chua nhan duoc IP (kiem tra TAILSCALE_KEY)!" -ForegroundColor Yellow
+            }
         } else {
             Write-Host "Khong tim thay tailscale.exe!" -ForegroundColor Yellow
         }
@@ -169,7 +228,7 @@ Write-Host ''
 Write-Host '==========================================================' -ForegroundColor Green
 Write-Host 'MAY AO WINDOWS RDP DA SAN SANG KET NOI!' -ForegroundColor Cyan
 Write-Host "1. KET NOI SIEU TOC QUA TAILSCALE:" -ForegroundColor Green
-Write-Host "   PC Name: $tsIp  (hoac: windows-khang)" -ForegroundColor Yellow
+Write-Host "   PC Name: $tsIp  (hoac: windows-khang2)" -ForegroundColor Yellow
 Write-Host "2. KET NOI DU PHONG QUA BORE:" -ForegroundColor Green
 Write-Host "   PC Name: bore.pub:$assignedPort" -ForegroundColor Yellow
 Write-Host "USERNAME: $user" -ForegroundColor Yellow
