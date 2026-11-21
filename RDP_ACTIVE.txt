@@ -1,5 +1,5 @@
 TAILSCALE_IP=Chua ket noi
 HOSTNAME=windows-khang2
-BORE=bore.pub:13927
+BORE=bore.pub:55596
 USER=khangnode2
-TIME=2026-11-21 00:57:30
+TIME=2026-11-21 01:13:46
